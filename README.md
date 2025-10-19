@@ -3,7 +3,7 @@ The **Steckdosen•Freund** is an intelligent controller for outdoor plugs inclu
 
 It contains an outdoor box with threee plugs and an indoor box with three Shelly PM Mini Gen 3. This can be up- or downscaled - however you like.
 
-Please be invited and have fun reading the Wiki.
+Please be invited and have fun reading the [Wiki](https://github.com/dummbold/Steckdosen-Freund/wiki)
 
 Please note the Information for different languages at the beginning of the HOME-Page.
 
