@@ -1,0 +1,509 @@
+/*
+ * Steckdosen•Freund (Socket Friend)
+ * 
+ * An ESP8266-based monitoring and control system for three outdoor power outlets.
+ * Each outlet is monitored by a Shelly PM Mini Gen3 device that measures voltage,
+ * current, and power consumption.
+ * 
+ * Features:
+ * - Polls three Shelly devices via HTTP/JSON API
+ * - Controls three RGB LEDs (APA106/WS2812) with different animations based on power consumption
+ * - Provides a mobile-optimized web dashboard (HTML5, optimized for iPhone 4S/5)
+ * - Allows configuration of Shelly IP addresses via web interface
+ * - Stores configuration persistently in EEPROM
+ * 
+ * Hardware:
+ * - ESP8266 (TYWE02S with 1MB memory)
+ * - 3x APA106 RGB LEDs (or WS2812 compatible)
+ * - Logic Level Converter (LLC-35) for 3.3V to 5V signal conversion
+ * - Buck converter providing 5V and 3.3V
+ * 
+ * LED Status Indicators:
+ * - Blue breathing: No consumption (< 0.1W)
+ * - Yellow solid: Standby consumption (0.1W - 5W)
+ * - Red blinking: Active consumption (> 5W)
+ * - Green flickering: Power generation/feed-in (negative power, e.g., solar)
+ * 
+ * Author: Created with assistance from DeutschlandGPT
+ * License: Open Source
+ */
+
+#include <ESP8266WiFi.h>        // WiFi connectivity for ESP8266
+#include <ESP8266HTTPClient.h>  // HTTP client to communicate with Shelly devices
+#include <ESP8266WebServer.h>   // Web server for dashboard and settings
+#include <WiFiClient.h>         // WiFi client for HTTP requests
+#include <ArduinoJson.h>        // JSON parsing for Shelly API responses
+#include <Adafruit_NeoPixel.h>  // Control of APA106/WS2812 RGB LEDs
+#include <EEPROM.h>             // Persistent storage for IP addresses
+
+// ============================================================================
+// WIFI CONFIGURATION
+// ============================================================================
+// Replace these with your actual WiFi credentials
+const char* ssid = "WLAN";
+const char* password = "Passwort";
+
+// ============================================================================
+// EEPROM CONFIGURATION
+// ============================================================================
+// EEPROM is used to store Shelly IP addresses persistently across reboots
+#define EEPROM_SIZE 512           // Total EEPROM size to allocate
+#define EEPROM_MAGIC 0xAB         // Magic byte to verify if EEPROM has been initialized
+#define ADDR_MAGIC 0              // Address where magic byte is stored
+#define ADDR_IP1 1                // Start address for first IP (50 bytes reserved)
+#define ADDR_IP2 51               // Start address for second IP (50 bytes reserved)
+#define ADDR_IP3 101              // Start address for third IP (50 bytes reserved)
+
+// ============================================================================
+// SHELLY IP ADDRESSES
+// ============================================================================
+// Default IP addresses for the three Shelly PM Mini Gen3 devices
+// These can be changed via the web interface and are stored in EEPROM
+char shelly_ips[3][50] = {
+  "192.168.163.115",  // Shelly for outlet 1
+  "192.168.163.116",  // Shelly for outlet 2
+  "192.168.163.117"   // Shelly for outlet 3
+};
+
+// ============================================================================
+// LED CONFIGURATION
+// ============================================================================
+#define LED_PIN 14                // GPIO pin connected to LED data line (via LLC)
+#define NUM_LEDS 3                // Number of RGB LEDs in the strip
+// Initialize NeoPixel strip with RGB color order and 800kHz timing
+Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_RGB + NEO_KHZ800);
+
+// ============================================================================
+// WEB SERVER
+// ============================================================================
+// Web server running on port 80 to serve dashboard and settings page
+ESP8266WebServer server(80);
+
+// ============================================================================
+// DATA STRUCTURES
+// ============================================================================
+// Structure to hold measurement data from each Shelly device
+struct ShellyData {
+  float voltage;  // Voltage in Volts
+  float current;  // Current in Amperes
+  float power;    // Active power in Watts (can be negative for feed-in)
+};
+
+// Array to store data for all three Shelly devices
+ShellyData shellyData[3];
+
+// Timing variables
+unsigned long lastUpdate = 0;  // Timestamp of last Shelly data update
+int breathPhase = 0;           // Phase counter for breathing LED animation
+
+// ============================================================================
+// SETUP FUNCTION
+// ============================================================================
+// Runs once at startup to initialize all components
+void setup() {
+  // Initialize EEPROM and load stored IP addresses
+  EEPROM.begin(EEPROM_SIZE);
+  loadIPsFromEEPROM();
+  
+  // Connect to WiFi network
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);  // Wait until connection is established
+  }
+  
+  // Initialize LED strip
+  strip.begin();
+  strip.setBrightness(50);  // Set brightness to 50 (0-255 range)
+  strip.show();             // Initialize all pixels to 'off'
+  
+  // Configure web server routes
+  server.on("/", handleRoot);              // Main dashboard page
+  server.on("/data", handleData);          // JSON data endpoint for AJAX updates
+  server.on("/settings", handleSettings);  // Settings page for IP configuration
+  server.on("/save", HTTP_POST, handleSave); // POST endpoint to save settings
+  server.begin();  // Start web server
+}
+
+// ============================================================================
+// MAIN LOOP
+// ============================================================================
+// Runs continuously to handle web requests, update data, and control LEDs
+void loop() {
+  // Handle incoming web server requests
+  server.handleClient();
+  
+  // Update Shelly data every 2 seconds
+  if (millis() - lastUpdate > 2000) {
+    updateShellyData();
+    lastUpdate = millis();
+  }
+  
+  // Update LED animations (runs continuously for smooth animations)
+  updateLEDs();
+  delay(50);  // Small delay to prevent excessive CPU usage
+}
+
+// ============================================================================
+// EEPROM FUNCTIONS
+// ============================================================================
+
+/*
+ * Load IP addresses from EEPROM
+ * Checks for magic byte to verify if EEPROM has been initialized.
+ * If not initialized, saves default values.
+ */
+void loadIPsFromEEPROM() {
+  if (EEPROM.read(ADDR_MAGIC) == EEPROM_MAGIC) {
+    // EEPROM has been initialized, load stored IP addresses
+    for (int i = 0; i < 3; i++) {
+      int addr = ADDR_IP1 + (i * 50);  // Calculate start address for this IP
+      for (int j = 0; j < 50; j++) {
+        shelly_ips[i][j] = EEPROM.read(addr + j);
+        if (shelly_ips[i][j] == 0) break;  // Stop at null terminator
+      }
+    }
+  } else {
+    // EEPROM not initialized, save default values
+    saveIPsToEEPROM();
+  }
+}
+
+/*
+ * Save IP addresses to EEPROM
+ * Writes magic byte and all three IP addresses to persistent storage
+ */
+void saveIPsToEEPROM() {
+  EEPROM.write(ADDR_MAGIC, EEPROM_MAGIC);  // Write magic byte
+  
+  // Write all three IP addresses
+  for (int i = 0; i < 3; i++) {
+    int addr = ADDR_IP1 + (i * 50);  // Calculate start address for this IP
+    for (int j = 0; j < 50; j++) {
+      EEPROM.write(addr + j, shelly_ips[i][j]);
+      if (shelly_ips[i][j] == 0) break;  // Stop at null terminator
+    }
+  }
+  
+  EEPROM.commit();  // Write changes to flash memory
+}
+
+// ============================================================================
+// SHELLY DATA FUNCTIONS
+// ============================================================================
+
+/*
+ * Update data from all three Shelly devices
+ * Makes HTTP GET requests to each Shelly's RPC API endpoint
+ * Parses JSON response and extracts voltage, current, and power values
+ */
+void updateShellyData() {
+  if (WiFi.status() != WL_CONNECTED) return;  // Skip if WiFi disconnected
+  
+  // Poll each Shelly device
+  for (int i = 0; i < 3; i++) {
+    WiFiClient client;
+    HTTPClient http;
+    
+    // Construct URL for Shelly Gen3 RPC API
+    // Endpoint: /rpc/PM1.GetStatus?id=0
+    String url = "http://" + String(shelly_ips[i]) + "/rpc/PM1.GetStatus?id=0";
+    http.begin(client, url);
+    http.setTimeout(2000);  // 2 second timeout to prevent blocking
+    int httpCode = http.GET();
+    
+    // If request successful, parse JSON response
+    if (httpCode == 200) {
+      String payload = http.getString();
+      JsonDocument doc;
+      
+      if (deserializeJson(doc, payload) == DeserializationError::Ok) {
+        // Extract values from JSON
+        shellyData[i].voltage = doc["voltage"];  // Voltage in V
+        shellyData[i].current = doc["current"];  // Current in A
+        shellyData[i].power = doc["apower"];     // Active power in W
+      }
+    }
+    
+    http.end();  // Close connection
+  }
+}
+
+// ============================================================================
+// LED CONTROL FUNCTIONS
+// ============================================================================
+
+/*
+ * Update LED colors and animations based on power consumption
+ * Called continuously from main loop for smooth animations
+ * 
+ * LED States:
+ * - Negative power (feed-in): Green flickering (random brightness)
+ * - Near zero (<0.1W): Blue breathing (sine wave animation)
+ * - Standby (0.1-5W): Yellow solid
+ * - Active (>5W): Red blinking (500ms interval)
+ */
+void updateLEDs() {
+  for (int i = 0; i < 3; i++) {
+    float power = shellyData[i].power;
+    
+    if (power < 0) {
+      // Power feed-in (e.g., solar): Green flickering
+      int brightness = random(50, 255);
+      strip.setPixelColor(i, strip.Color(0, brightness, 0));
+      
+    } else if (abs(power) < 0.1) {
+      // No consumption: Blue breathing animation
+      // Uses sine wave for smooth pulsing effect
+      int brightness = (sin(breathPhase * 0.05) + 1) * 127;
+      strip.setPixelColor(i, strip.Color(0, 0, brightness));
+      
+    } else if (power <= 5) {
+      // Standby consumption: Yellow solid
+      strip.setPixelColor(i, strip.Color(255, 255, 0));
+      
+    } else {
+      // Active consumption: Red blinking
+      // Toggles between full brightness and off every 500ms
+      int brightness = (millis() / 500) % 2 ? 255 : 0;
+      strip.setPixelColor(i, strip.Color(brightness, 0, 0));
+    }
+  }
+  
+  strip.show();   // Update all LEDs
+  breathPhase++;  // Increment animation phase counter
+}
+
+/*
+ * Map outlet number to LED index
+ * The physical LED order is reversed compared to outlet numbering
+ * Outlet 1 -> LED 2, Outlet 2 -> LED 1, Outlet 3 -> LED 0
+ */
+int getLEDIndex(int dose) {
+  if (dose == 0) return 2;
+  if (dose == 1) return 1;
+  return 0;
+}
+
+/*
+ * Get CSS color code for LED state based on power consumption
+ * Used to set background color of dashboard tiles
+ * Returns hex color code as string
+ */
+String getLEDColor(int ledIdx) {
+  float power = shellyData[ledIdx].power;
+  
+  if (power < 0) return "#00ff00";        // Green for feed-in
+  if (abs(power) < 0.1) return "#0000ff"; // Blue for no consumption
+  if (power <= 5) return "#ffff00";       // Yellow for standby
+  return "#ff0000";                       // Red for active consumption
+}
+
+// ============================================================================
+// WEB SERVER HANDLERS
+// ============================================================================
+
+/*
+ * Handle root page request ("/")
+ * Serves the main dashboard with three tiles showing outlet status
+ * 
+ * Dashboard features:
+ * - Mobile-optimized (320px width for iPhone 4S/5)
+ * - Three tiles with colored backgrounds matching LED state
+ * - Real-time data display (power, voltage, current)
+ * - Auto-refresh via AJAX every 2 seconds
+ * - Settings button in header
+ * 
+ * Design considerations:
+ * - Uses Flexbox with -webkit- prefixes for iOS 7 Safari compatibility
+ * - Fixed 320px width to prevent scaling issues
+ * - Dark gray text (#333333) for readability on all background colors
+ * - No external dependencies (no CDN, all inline)
+ */
+void handleRoot() {
+  String html = "<!DOCTYPE html><html><head><meta charset='utf-8'>";
+  
+  // Viewport settings for mobile optimization
+  html += "<meta name='viewport' content='width=320, user-scalable=no'>";
+  
+  // iOS web app settings for home screen installation
+  html += "<meta name='apple-mobile-web-app-capable' content='yes'>";
+  html += "<meta name='apple-mobile-web-app-status-bar-style' content='black'>";
+  html += "<meta name='apple-mobile-web-app-title' content='Steckdosen'>";
+  
+  html += "<title>Steckdosen Aussen</title>";
+  
+  // Inline CSS for complete standalone functionality
+  html += "<style>";
+  html += "body{margin:0;padding:0;font-family:Helvetica,Arial,sans-serif;background:#e0e0e0;width:320px;overflow:hidden;}";
+  html += "header{background:#000;color:#fff;padding:12px;text-align:center;position:relative;height:24px;box-sizing:content-box;}";
+  html += "h1{margin:0;font-size:18px;font-weight:bold;line-height:24px;}";
+  html += ".arrow{position:absolute;right:12px;top:12px;color:#fff;text-decoration:none;font-size:24px;line-height:24px;}";
+  html += ".container{width:320px;}";
+  
+  // Socket tile styling with Flexbox for proper spacing
+  html += ".socket{display:-webkit-flex;display:flex;-webkit-flex-direction:column;flex-direction:column;-webkit-justify-content:space-between;justify-content:space-between;margin:0;padding:5px 10px;height:137px;border-bottom:1px solid #ccc;box-sizing:border-box;}";
+  
+  // Title row with emoji icons (numbered circles)
+  html += ".socket-title{font-size:32px;margin:0;color:#333333;}";
+  
+  // Large power display
+  html += ".power{font-size:72px;font-weight:bold;margin:0;color:#333333;text-align:right;line-height:1;}";
+  
+  // Details row (voltage and current)
+  html += ".details{font-size:20px;color:#333333;margin:0;font-weight:bold;display:-webkit-flex;display:flex;-webkit-justify-content:space-between;justify-content:space-between;}";
+  html += "</style></head><body>";
+  
+  // Header with title and settings link
+  html += "<header><h1>Steckdosen Aussen</h1><a href='/settings' class='arrow'>&#x27A1;&#xFE0F;</a></header>";
+  html += "<div class='container'>";
+  
+  // Emoji icons for outlets (keycap numbers 1, 2, 3)
+  String icons[3] = {"1&#65039;&#8419;", "2&#65039;&#8419;", "3&#65039;&#8419;"};
+  
+  // Generate three outlet tiles
+  for (int i = 0; i < 3; i++) {
+    int ledIdx = getLEDIndex(i);           // Map outlet to LED index
+    String color = getLEDColor(ledIdx);    // Get background color
+    
+    // Tile with dynamic background color
+    html += "<div class='socket' id='socket" + String(i) + "' style='background:" + color + ";'>";
+    html += "<div class='socket-title'>" + icons[i] + "</div>";
+    html += "<div class='power' id='power" + String(i) + "'>" + String(shellyData[ledIdx].power, 0) + " W</div>";
+    html += "<div class='details' id='details" + String(i) + "'><span>" + String(shellyData[ledIdx].voltage, 1) + " V</span><span>" + String(shellyData[ledIdx].current, 1) + " A</span></div>";
+    html += "</div>";
+  }
+  
+  html += "</div>";
+  
+  // JavaScript for auto-refresh functionality
+  html += "<script>";
+  
+  // Function to determine color based on power value
+  html += "function getColor(power){";
+  html += "if(power<0)return '#00ff00';";              // Green for feed-in
+  html += "if(Math.abs(power)<0.1)return '#0000ff';";  // Blue for no consumption
+  html += "if(power<=5)return '#ffff00';";             // Yellow for standby
+  html += "return '#ff0000';}";                        // Red for active
+  
+  // AJAX update function
+  html += "function update(){";
+  html += "var xhr=new XMLHttpRequest();";
+  html += "xhr.open('GET','/data',true);";
+  html += "xhr.onload=function(){";
+  html += "if(xhr.status==200){";
+  html += "var data=JSON.parse(xhr.responseText);";
+  
+  // Update all three tiles
+  html += "for(var i=0;i<3;i++){";
+  html += "document.getElementById('power'+i).innerHTML=Math.round(data[i].power)+' W';";
+  html += "document.getElementById('details'+i).innerHTML='<span>'+data[i].voltage.toFixed(1)+' V</span><span>'+data[i].current.toFixed(1)+' A</span>';";
+  html += "document.getElementById('socket'+i).style.background=getColor(data[i].power);";
+  html += "}}}; xhr.send();}";
+  
+  // Auto-refresh every 2 seconds
+  html += "setInterval(update,2000);";
+  html += "</script></body></html>";
+  
+  server.send(200, "text/html", html);
+}
+
+/*
+ * Handle data endpoint request ("/data")
+ * Returns JSON array with current measurements for all three outlets
+ * Used by dashboard JavaScript for AJAX updates
+ * 
+ * JSON format:
+ * [
+ *   {"voltage": 230.5, "current": 0.123, "power": 28.4},
+ *   {"voltage": 230.2, "current": 0.000, "power": 0.0},
+ *   {"voltage": 229.8, "current": 1.234, "power": 283.7}
+ * ]
+ */
+void handleData() {
+  String json = "[";
+  
+  for (int i = 0; i < 3; i++) {
+    int ledIdx = getLEDIndex(i);  // Map outlet to LED/Shelly index
+    
+    if (i > 0) json += ",";  // Add comma separator between objects
+    
+    // Build JSON object for this outlet
+    json += "{\"voltage\":" + String(shellyData[ledIdx].voltage, 1);
+    json += ",\"current\":" + String(shellyData[ledIdx].current, 3);
+    json += ",\"power\":" + String(shellyData[ledIdx].power, 1) + "}";
+  }
+  
+  json += "]";
+  
+  server.send(200, "application/json", json);
+}
+
+/*
+ * Handle settings page request ("/settings")
+ * Serves configuration page for changing Shelly IP addresses
+ * 
+ * Features:
+ * - Simple form with three IP address input fields
+ * - Pre-filled with current values
+ * - POST to /save endpoint
+ * - Mobile-optimized layout
+ */
+void handleSettings() {
+  String html = "<!DOCTYPE html><html><head><meta charset='utf-8'>";
+  html += "<meta name='viewport' content='width=320'>";
+  html += "<meta name='apple-mobile-web-app-capable' content='yes'>";
+  html += "<meta name='apple-mobile-web-app-status-bar-style' content='black'>";
+  html += "<title>Einstellungen</title>";
+  
+  // Inline CSS for settings page
+  html += "<style>";
+  html += "body{margin:0;padding:0;font-family:Helvetica,Arial,sans-serif;background:#e0e0e0;width:320px;}";
+  html += "header{background:#000;color:#fff;padding:12px;text-align:center;height:24px;}";
+  html += "h1{margin:0;font-size:18px;font-weight:bold;line-height:24px;}";
+  html += ".container{padding:20px;}";
+  html += "label{display:block;margin:15px 0 5px;font-weight:bold;font-size:14px;}";
+  html += "input{width:280px;padding:8px;font-size:16px;border:1px solid #ccc;}";
+  html += "button{width:280px;padding:12px;margin-top:20px;background:#007aff;color:#fff;border:none;font-size:16px;}";
+  html += "</style></head><body>";
+  
+  html += "<header><h1>Einstellungen</h1></header>";
+  html += "<div class='container'>";
+  html += "<form method='POST' action='/save'>";
+  
+  // Note: IP mapping is reversed to match physical outlet numbering
+  html += "<label>Dose 1 IP:</label><input name='ip1' value='" + String(shelly_ips[2]) + "'>";
+  html += "<label>Dose 2 IP:</label><input name='ip2' value='" + String(shelly_ips[1]) + "'>";
+  html += "<label>Dose 3 IP:</label><input name='ip3' value='" + String(shelly_ips[0]) + "'>";
+  
+  html += "<button type='submit'>Speichern</button>";
+  html += "</form></div></body></html>";
+  
+  server.send(200, "text/html", html);
+}
+
+/*
+ * Handle save settings request (POST "/save")
+ * Processes form submission from settings page
+ * Updates IP addresses and saves to EEPROM
+ * Redirects back to main dashboard after saving
+ */
+void handleSave() {
+  // Extract IP addresses from POST parameters
+  // Note: Mapping is reversed to match physical outlet numbering
+  if (server.hasArg("ip1")) {
+    server.arg("ip1").toCharArray(shelly_ips[2], 50);
+  }
+  if (server.hasArg("ip2")) {
+    server.arg("ip2").toCharArray(shelly_ips[1], 50);
+  }
+  if (server.hasArg("ip3")) {
+    server.arg("ip3").toCharArray(shelly_ips[0], 50);
+  }
+  
+  // Save to EEPROM for persistence across reboots
+  saveIPsToEEPROM();
+  
+  // Redirect to main page (HTTP 303 See Other)
+  server.sendHeader("Location", "/");
+  server.send(303);
+}
