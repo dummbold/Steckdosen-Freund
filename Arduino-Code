@@ -60,9 +60,9 @@ const char* password = "Passwort";
 // Default IP addresses for the three Shelly PM Mini Gen3 devices
 // These can be changed via the web interface and are stored in EEPROM
 char shelly_ips[3][50] = {
-  "192.168.163.115",  // Shelly for outlet 1
-  "192.168.163.116",  // Shelly for outlet 2
-  "192.168.163.117"   // Shelly for outlet 3
+  "192.168.111.111",  // Shelly for outlet 1
+  "192.168.111.112",  // Shelly for outlet 2
+  "192.168.111.113"   // Shelly for outlet 3
 };
 
 // ============================================================================
