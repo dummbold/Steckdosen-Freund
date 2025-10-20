@@ -237,7 +237,7 @@ void updateShellyData() {
  * Called continuously from main loop for smooth animations
  * 
  * LED States:
- * - Negative power (feed-in): Green flickering (random brightness)
+ * - Negative power (feed-in for solar-inverter): Green flickering (random brightness)
  * - Near zero (<0.1W): Blue breathing (sine wave animation)
  * - Standby (0.1-5W): Yellow solid
  * - Active (>5W): Red blinking (500ms interval)
