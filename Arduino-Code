@@ -13,7 +13,7 @@
  * - Stores configuration persistently in EEPROM
  * 
  * Hardware:
- * - ESP8266 (TYWE02S with 1MB memory)
+ * - ESP8266 (ESP-02S - former TYWE02S with 1MB memory)
  * - 3x APA106 RGB LEDs (or WS2812 compatible)
  * - Logic Level Converter (LLC-35) for 3.3V to 5V signal conversion
  * - Buck converter providing 5V and 3.3V
@@ -28,6 +28,7 @@
  * License: Open Source
  */
 
+// Please ensure that you have installed the correct libraries in Arduino IDE!!! 
 #include <ESP8266WiFi.h>        // WiFi connectivity for ESP8266
 #include <ESP8266HTTPClient.h>  // HTTP client to communicate with Shelly devices
 #include <ESP8266WebServer.h>   // Web server for dashboard and settings
