@@ -9,4 +9,4 @@ Der ****Steckdosen•Freund**** ist ein intelligenter Controller für Außenstec
 
 Das System besteht aus einer Außeneinheit mit drei Steckdosen und einer Inneneinheit mit drei Shelly PM Mini Gen 3 und der Elektronik
 
-Schau gerne vorbei und hab Spaß beim Lesen des (Wiki)[https://github.com/dummbold/Steckdosen-Freund/wiki].
+Schau gerne vorbei und hab Spaß beim Lesen des [Wiki](https://github.com/dummbold/Steckdosen-Freund/wiki).
