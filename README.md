@@ -1,9 +1,7 @@
 # Steckdosen•Freund
-The **Steckdosen•Freund** is an intelligent controller for outdoor plugs including power measurement, optical control on LEDs and a cool website perfectly to use old smartphones as displays. The logic is build on a tiny little ESP-02S programmed with Arduino.
 
-It contains an outdoor box with threee plugs and an indoor box with three Shelly PM Mini Gen 3.
+Der ****Steckdosen•Freund**** ist ein intelligenter Controller für Außensteckdosen mit Strommessung, optischer Kontrolle über LEDs und einer praktischen Website, um ein altes iPhone4 als Display zu nutzen. Die Schaltung basiert auf einem kleinen ESP-02S, der mit Arduino programmiert wurde.
 
-Please be invited and have fun reading the [Wiki](https://github.com/dummbold/Steckdosen-Freund/wiki)
+Das System besteht aus einer Außeneinheit mit drei Steckdosen und einer Inneneinheit mit drei Shelly PM Mini Gen 3 und der Elektronik
 
-Please note the Information for different languages at the beginning of the HOME-Page.
-
+Schau gerne vorbei und hab Spaß beim Lesen des Wiki.
