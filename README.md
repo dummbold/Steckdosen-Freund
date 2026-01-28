@@ -13,7 +13,7 @@
 
 # Steckdosen•Freund
 
-Der **Steckdosen•Freund** ist ein intelligenter Controller für drei Aussensteckdosen mit Strommessung, mechanischer Abschaltung, optischer Kontrolle über LEDs und einer praktischen Website, um ein altes iPhone4 als Display zu nutzen. Die Schaltung basiert auf einem kleinen ESP-02S, der mit Arduino programmiert wurde. Die Strommessung erfolgt über drei Shelly 1 PM Mini (Gen3).
+Der **Steckdosen•Freund** ist ein intelligenter Controller für drei Aussensteckdosen mit Strommessung, mechanischer Abschaltung, optischer Kontrolle über LEDs und einer praktischen Website, um ein altes iPhone4 als Display zu nutzen. Die Schaltung basiert auf einem kleinen ESP-02S, der mit Arduino programmiert wurde. Die Strommessung erfolgt über drei Shelly PM Mini (Gen3).
 
 https://github.com/user-attachments/assets/6fd96432-7380-4ce0-91b1-20ba2a023ede
 
